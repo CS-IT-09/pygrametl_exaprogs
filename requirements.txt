@@ -1,0 +1,4 @@
+# Python packages for the CPython versions (pygrametl1_cpython.py, pygrametl2_cpython.py).
+# run_cpython.sh installs these automatically into .venv.
+pygrametl==2.9
+psycopg2-binary

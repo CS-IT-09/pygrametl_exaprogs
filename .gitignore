@@ -1,0 +1,14 @@
+# Generated data, logs and timing results (can be recreated with the run scripts)
+run/
+
+# Downloaded jars and pygrametl source (downloaded again by the run scripts)
+lib/
+
+# Python / Jython build artifacts and environments
+.venv/
+__pycache__/
+*.pyc
+*$py.class
+
+# macOS
+.DS_Store
