@@ -33,7 +33,12 @@ brew services start postgresql@18
 ```
 
 Everything else is downloaded by the scripts on first use: Jython 2.7.4, the PostgreSQL JDBC
-driver, pygrametl 2.9 and psycopg2 (into `.venv`).
+driver, pygrametl 2.9 and psycopg2.
+
+Optional but recommended: [uv](https://docs.astral.sh/uv/) (`brew install uv`). If it is
+installed, `run_cpython.sh` uses it to create `.venv-3.14` with the same Python version on
+every machine (`PY_VERSION=3.14t` gives the free-threaded build in `.venv-3.14t`). Without uv
+it falls back to `python3 -m venv .venv` and pip.
 
 The programs connect to `jdbc:postgresql://localhost/chr?user=chr` (hard-coded by the original
 author), so the scripts create a PostgreSQL user and database called `chr` if they are missing.

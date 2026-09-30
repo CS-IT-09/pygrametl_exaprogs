@@ -6,6 +6,7 @@ lib/
 
 # Python / Jython build artifacts and environments
 .venv/
+.venv-*/
 __pycache__/
 *.pyc
 *$py.class
