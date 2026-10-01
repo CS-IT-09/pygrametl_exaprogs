@@ -15,12 +15,15 @@
 #                                               before every run (asks for your password once)
 #   PG_MONITOR=0                                don't monitor PostgreSQL during the runs
 #                                               (./setup_pg_monitoring.sh once adds SQL statement times)
-#   PY_VERSION=3.14 (default) | 3.14t | 3.13 ...  Python version, used when uv is installed
+#   UNLOGGED=1                                  create the tables as UNLOGGED (no WAL; to measure
+#                                               how much PostgreSQL's write work costs)
+#   PY_VERSION=3.14t (default) | 3.14 | 3.13 ... Python version, used when uv is installed
+#                                               (3.14t = free-threaded build, 3.14 = normal build with GIL)
 #
 # Examples:
 #   SIZE=5 ./run_cpython.sh both          # paper's params-5 data set, both programs
 #   SIZE=5 RUNS=3 ./run_cpython.sh 2      # parallel version three times
-#   SIZE=5 PY_VERSION=3.14t ./run_cpython.sh 2   # parallel version on free-threaded Python
+#   SIZE=5 PY_VERSION=3.14 ./run_cpython.sh 2    # parallel version on the normal (GIL) Python
 #
 # Every run is appended to run/results.csv (shared with run_jython.sh) with its time,
 # memory, disk I/O, row counts and a description of the machine and PostgreSQL settings.
@@ -56,11 +59,11 @@ MAVEN=https://repo1.maven.org/maven2            # central download site for Java
 #  - inside a pygrametl checkout: use its .venv and its pygrametl source code
 #  - standalone: use (or create) a virtual environment in exaprogs/ with the packages
 #    in requirements.txt:
-#      with uv installed:  exaprogs/.venv-$PY_VERSION, e.g. .venv-3.14 (created by uv)
+#      with uv installed:  exaprogs/.venv-$PY_VERSION, e.g. .venv-3.14t (created by uv)
 #      without uv:         exaprogs/.venv (created by python3 -m venv)
-#  - PY_VERSION=3.14 (default) picks the Python version when uv is used; uv downloads it
-#    if it is not installed. PY_VERSION=3.14t gives the free-threaded build (no GIL),
-#    in its own .venv-3.14t, so both can be compared.
+#  - PY_VERSION=3.14t (default) picks the Python version when uv is used; uv downloads it
+#    if it is not installed. 3.14t is the free-threaded build (no GIL); PY_VERSION=3.14
+#    gives the normal build with the GIL, in its own .venv-3.14, so both can be compared.
 #  - PYTHON=/path/to/python overrides the interpreter
 # A .venv ("virtual environment") is a private Python installation in a folder, so the
 # packages installed for this project do not mix with the rest of the system.
@@ -201,9 +204,9 @@ run() {
   for i in $(seq 1 "$RUNS"); do
     echo
     echo "=== $prog  (run $i of $RUNS) ==="
-    # Start every run from empty tables: starschema.sql drops and recreates the star schema.
-    # The grep hides PostgreSQL's harmless "table does not exist, skipping" style notices.
-    psql -q -h localhost -U chr -d chr -f "$HERE/starschema.sql" 2>&1 | grep -v -e NOTICE -e DETAIL -e '^drop cascades' || true
+    # Start every run from empty tables: starschema.sql drops and recreates the star schema
+    # (as UNLOGGED tables if UNLOGGED=1; see reset_schema in bench_common.sh).
+    reset_schema "$HERE/starschema.sql"
     clear_caches            # does nothing unless CLEAR_CACHE=1 (see bench_common.sh)
 
     # Run the ETL program with the .venv Python and measure it: wall-clock time, CPU time,

@@ -45,8 +45,9 @@ compete for port 5432 and the benchmarks may silently use the wrong one (check w
 `brew services list`; the version is recorded in `results.csv`).
 
 Optional but recommended: [uv](https://docs.astral.sh/uv/) (`brew install uv`). If it is
-installed, `run_cpython.sh` uses it to create `.venv-3.14` with the same Python version on
-every machine (`PY_VERSION=3.14t` gives the free-threaded build in `.venv-3.14t`). Without uv
+installed, `run_cpython.sh` uses it to create `.venv-3.14t` with the same Python version on
+every machine: by default the free-threaded build of 3.14 (no GIL); `PY_VERSION=3.14` gives the
+normal build with the GIL in `.venv-3.14`. Without uv
 it falls back to `python3 -m venv .venv` and pip.
 
 The programs connect to `jdbc:postgresql://localhost/chr?user=chr` (hard-coded by the original
@@ -72,9 +73,10 @@ Options (environment variables, put them before the command):
 | `REGEN` | `1` = regenerate the CSV files | `0` |
 | `CLEAR_CACHE` | `1` = restart PostgreSQL and clear the OS file cache before every run ("cold" runs; asks for your password once) | `0` |
 | `PG_MONITOR` | `0` = don't monitor PostgreSQL during the runs | `1` |
-| `PY_VERSION` | CPython version when uv is used, e.g. `3.13`, `3.14t` (free-threaded) | `3.14` |
+| `UNLOGGED` | `1` = create the tables as UNLOGGED (PostgreSQL writes no WAL for them); recorded as `unlogged_tables=on` in `pg_settings` | `0` |
+| `PY_VERSION` | CPython version when uv is used, e.g. `3.14` (normal build with GIL), `3.13`; a `t` at the end means free-threaded | `3.14t` |
 | `PYTHON` | CPython interpreter to use instead of the `.venv` one | |
-| `JAVA_OPTS` | extra Java options for Jython, e.g. `-Xmx4g` | |
+| `JAVA_OPTS` | extra Java options for Jython, e.g. `-Xmx5g` (more memory); recorded in `runtime_version` | |
 | `PG_RESTART_CMD` | command to restart PostgreSQL for `CLEAR_CACHE=1`, if not a Homebrew service or `systemctl` | |
 | `TIMER_PYTHON` | `python3` used by the measuring code | `python3` on the PATH |
 
@@ -84,7 +86,7 @@ Example: the paper's smallest data set (1 million downloads, 5 million facts), s
 SIZE=5 RUNS=7 ./run_jython.sh both
 SIZE=5 RUNS=7 ./run_cpython.sh both
 SIZE=5 RUNS=7 CLEAR_CACHE=1 ./run_cpython.sh both    # cold runs
-SIZE=5 RUNS=7 PY_VERSION=3.14t ./run_cpython.sh 2    # parallel version on free-threaded Python
+SIZE=5 RUNS=7 PY_VERSION=3.14 ./run_cpython.sh 2     # parallel version on the normal (GIL) Python
 ```
 
 Before every run the tables are dropped and recreated (`starschema.sql`), so all runs start
@@ -108,7 +110,7 @@ scripts; runs from one script invocation share a `run_id`). The columns are:
 | Check | `page_versions`, `facts`, `total_errors` |
 | Database connection, sampled about once per second | `pg_busy_pct` (working), split into `pg_cpu_pct`, `pg_io_pct` (waiting for disk), `pg_lock_pct`, `pg_other_pct`; `pg_waiting_for_etl_pct` (idle, waiting for the ETL program) |
 | PostgreSQL work | `pg_cpu_s` (CPU time of all PostgreSQL processes), `pg_stmt_time_s`, `pg_stmt_calls` (SQL statements), `pg_io_time_s` (time reading/writing data files), `pg_wal_mb` (WAL written), `pg_checkpoints`, `pg_checkpoints_forced`, `pg_cache_hit_pct`, `pg_blocks_read` |
-| Setup | `cache_cleared`, `host`, `os`, `cpu`, `cores`, `ram_gb`, `runtime_version` (e.g. `CPython 3.14.7 (uv)`), `postgres_version`, `pg_settings` (main PostgreSQL settings) |
+| Setup | `cache_cleared`, `host`, `os`, `cpu`, `cores`, `ram_gb`, `runtime_version` (e.g. `CPython 3.14.7 free-threaded (uv)`), `postgres_version`, `pg_settings` (main PostgreSQL settings) |
 
 Values that cannot be measured are written as `NA`. If the columns change in a new version
 of the scripts, the old file is renamed to `run/results-old-<date>.csv`.

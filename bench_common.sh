@@ -6,6 +6,7 @@
 #   init_results_file         results.csv with the current header
 #   init_cache_clearing       asks for sudo once if CLEAR_CACHE=1
 #   clear_caches              restart PostgreSQL + drop the OS file cache (if CLEAR_CACHE=1)
+#   reset_schema SQL_FILE     recreate the empty tables (UNLOGGED tables if UNLOGGED=1)
 #   measure LOG CMD...        run CMD, measure time, memory, disk I/O and PostgreSQL activity
 #                             (needs python3 for the timer; any python3 works)
 #   db_size_mb                size of the loaded data warehouse
@@ -51,9 +52,40 @@ collect_machine_info() {
       from pg_settings where name in ('shared_buffers','work_mem','maintenance_work_mem',
       'max_wal_size','checkpoint_timeout','synchronous_commit','fsync','wal_level',
       'track_io_timing','shared_preload_libraries')")")
+  # Not a PostgreSQL setting, but part of the database setup, so it is recorded here too
+  if [ "${UNLOGGED:-0}" = 1 ]; then
+    PG_SETTINGS="$PG_SETTINGS unlogged_tables=on"
+  else
+    PG_SETTINGS="$PG_SETTINGS unlogged_tables=off"
+  fi
   echo "Machine: $CPU, $CORES cores, $RAM_GB GB RAM, $OS"
   echo "PostgreSQL $PG_VERSION: $PG_SETTINGS"
   pg_monitor_check
+}
+
+# ------------------------------------------------------------ tables
+# reset_schema SQL_FILE
+# Drops and recreates the star schema, so every run starts from empty tables.
+# With UNLOGGED=1 the tables are created as UNLOGGED: PostgreSQL then writes no WAL
+# for them (faster, but their contents are lost after a crash; fine for benchmarks).
+# The file itself is not changed. The grep hides harmless NOTICE messages.
+reset_schema() {
+  local sql=$1 wrong
+  if [ "${UNLOGGED:-0}" = 1 ]; then
+    sed 's/^\([[:space:]]*\)create table/\1create unlogged table/' "$sql" |
+      psql -q -h localhost -U chr -d chr -f - 2>&1 | grep -v -e NOTICE -e DETAIL -e '^drop cascades' || true
+  else
+    psql -q -h localhost -U chr -d chr -f "$sql" 2>&1 | grep -v -e NOTICE -e DETAIL -e '^drop cascades' || true
+  fi
+  # Check that the tables really are (un)logged as requested
+  if [ "${UNLOGGED:-0}" = 1 ]; then
+    wrong=$(pgq "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                 where n.nspname = 'pygrametlexa' and c.relkind = 'r' and c.relpersistence <> 'u'")
+  else
+    wrong=$(pgq "select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace
+                 where n.nspname = 'pygrametlexa' and c.relkind = 'r' and c.relpersistence = 'u'")
+  fi
+  [ "$wrong" = 0 ] || { echo "The tables were not created as requested (UNLOGGED=${UNLOGGED:-0})"; exit 1; }
 }
 
 # ------------------------------------------------------------ results file

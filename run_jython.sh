@@ -15,6 +15,8 @@
 #                                               before every run (asks for your password once)
 #   PG_MONITOR=0                                don't monitor PostgreSQL during the runs
 #                                               (./setup_pg_monitoring.sh once adds SQL statement times)
+#   UNLOGGED=1                                  create the tables as UNLOGGED (no WAL; to measure
+#                                               how much PostgreSQL's write work costs)
 #
 # Examples:
 #   SIZE=5 ./run_jython.sh both          # paper's params-5 data set, both programs
@@ -54,7 +56,7 @@ MAVEN=https://repo1.maven.org/maven2            # central download site for Java
 # ---------------------------------------------------------------- prerequisites
 # "command -v X" checks that program X is installed; "|| { ...; exit 1; }" stops with a hint if not.
 command -v java >/dev/null || { echo "Java not found. Install it: brew install openjdk (then follow brew's PATH hint)"; exit 1; }
-command -v psql >/dev/null || { echo "psql not found. Install PostgreSQL: brew install postgresql@16 && brew services start postgresql@16"; exit 1; }
+command -v psql >/dev/null || { echo "psql not found. Install PostgreSQL: brew install postgresql@18 && brew services start postgresql@18"; exit 1; }
 
 # Download the two .jar files only the first time ("[ -f file ] ||" = only if the file is missing)
 mkdir -p "$LIB" "$WORK"
@@ -131,6 +133,8 @@ echo "Input: $(($(wc -l < DownloadLog.csv) - 1)) downloads, $(($(wc -l < TestRes
 # Record exact versions so results can be compared and reproduced later
 JAVA_VERSION=$(java -version 2>&1 | awk -F'"' '/version/ {print $2; exit}')
 RUNTIME_VERSION="Jython $(jython -c 'import sys; print(sys.version.split()[0])' 2>/dev/null | tail -1) on Java $JAVA_VERSION"
+# Java options such as -Xmx (maximum memory) can change the timing, so they are recorded too
+[ -z "${JAVA_OPTS:-}" ] || RUNTIME_VERSION="$RUNTIME_VERSION ($JAVA_OPTS)"
 echo "Runtime: $RUNTIME_VERSION"
 
 # Load the measuring code shared with run_cpython.sh (". file" = run it inside this script,
@@ -147,9 +151,9 @@ run() {
   for i in $(seq 1 "$RUNS"); do
     echo
     echo "=== $prog  (run $i of $RUNS) ==="
-    # Start every run from empty tables: starschema.sql drops and recreates the star schema.
-    # The grep hides PostgreSQL's harmless "table does not exist, skipping" style notices.
-    psql -q -h localhost -U chr -d chr -f "$HERE/starschema.sql" 2>&1 | grep -v -e NOTICE -e DETAIL -e '^drop cascades' || true
+    # Start every run from empty tables: starschema.sql drops and recreates the star schema
+    # (as UNLOGGED tables if UNLOGGED=1; see reset_schema in bench_common.sh).
+    reset_schema "$HERE/starschema.sql"
     clear_caches            # does nothing unless CLEAR_CACHE=1 (see bench_common.sh)
 
     # Run the ETL program and measure it: wall-clock time, CPU time, memory and disk I/O.
