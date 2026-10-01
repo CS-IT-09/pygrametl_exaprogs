@@ -13,6 +13,8 @@
 #   RUNS=3                                      run each program N times (default 1)
 #   CLEAR_CACHE=1                               restart PostgreSQL and clear the OS file cache
 #                                               before every run (asks for your password once)
+#   PG_MONITOR=0                                don't monitor PostgreSQL during the runs
+#                                               (./setup_pg_monitoring.sh once adds SQL statement times)
 #   PY_VERSION=3.14 (default) | 3.14t | 3.13 ...  Python version, used when uv is installed
 #
 # Examples:
@@ -209,6 +211,8 @@ run() {
     # PYTHONPATH is only set when using a pygrametl checkout; otherwise it is empty and
     # pygrametl comes from the .venv.
     # The program's own messages go to run/last_run.log
+    # Name for this run, used for the file with its slowest SQL statements (run/pg_statements/)
+    MEASURE_LABEL="cpython_pygrametl$1_run$i"
     if ! measure last_run.log env PYTHONPATH="$PYGRAMETL_PATH" "$PYTHON" "$HERE/$prog"; then
       echo "$prog FAILED. Its output:"; cat last_run.log; exit 1
     fi

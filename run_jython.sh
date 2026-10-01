@@ -13,6 +13,8 @@
 #   RUNS=3                                      run each program N times (default 1)
 #   CLEAR_CACHE=1                               restart PostgreSQL and clear the OS file cache
 #                                               before every run (asks for your password once)
+#   PG_MONITOR=0                                don't monitor PostgreSQL during the runs
+#                                               (./setup_pg_monitoring.sh once adds SQL statement times)
 #
 # Examples:
 #   SIZE=5 ./run_jython.sh both          # paper's params-5 data set, both programs
@@ -153,6 +155,8 @@ run() {
     # Run the ETL program and measure it: wall-clock time, CPU time, memory and disk I/O.
     # Only the program itself is timed, not the table setup or cache clearing above.
     # The program's own messages (incl. Java warnings) go to run/last_run.log
+    # Name for this run, used for the file with its slowest SQL statements (run/pg_statements/)
+    MEASURE_LABEL="jython_pygrametl$1_run$i"
     if ! measure last_run.log "${JYTHON_CMD[@]}" "$HERE/$prog"; then
       echo "$prog FAILED. Its output:"; cat last_run.log; exit 1
     fi
