@@ -18,8 +18,12 @@ and the fact table `testresults`.
 | `pygrametl2_cpython.py` | CPython 3 version of `pygrametl2.py` (psycopg2) |
 | `starschema.sql` | Creates the `pygrametlexa` schema and its tables |
 | `datagenerator/` | Generates the input CSV files; `params-N.py` are the data set sizes |
-| `run_jython.sh` | Runs the Jython programs |
-| `run_cpython.sh` | Runs the CPython programs |
+| `run_jython.sh` | Runs and measures the Jython programs |
+| `run_cpython.sh` | Runs and measures the CPython programs |
+| `bench_common.sh` | Measuring code shared by both run scripts (sourced, not run directly): timing, memory, PostgreSQL monitoring, cache clearing, `results.csv` |
+| `setup_pg_monitoring.sh` | One-time PostgreSQL setup for SQL statement and disk I/O times (optional) |
+| `requirements.txt` | Python packages for the CPython versions (installed automatically) |
+| `results.md` | Summary of the benchmark results |
 | `pdi-1-conn.ktr`, `pdi-2-conns.ktr` | The same ETL flow in Pentaho Data Integration, used for comparison in the paper |
 
 The CPython versions only change the platform-specific lines (database driver, bulk loader,
@@ -33,7 +37,12 @@ brew services start postgresql@18
 ```
 
 Everything else is downloaded by the scripts on first use: Jython 2.7.4, the PostgreSQL JDBC
-driver, pygrametl 2.9 and psycopg2.
+driver, pygrametl 2.9 and psycopg2. The measuring code also needs a `python3` on the PATH
+(any version; macOS has one).
+
+Only one PostgreSQL version may run at a time: if several Homebrew versions are started, they
+compete for port 5432 and the benchmarks may silently use the wrong one (check with
+`brew services list`; the version is recorded in `results.csv`).
 
 Optional but recommended: [uv](https://docs.astral.sh/uv/) (`brew install uv`). If it is
 installed, `run_cpython.sh` uses it to create `.venv-3.14` with the same Python version on
@@ -46,11 +55,13 @@ author), so the scripts create a PostgreSQL user and database called `chr` if th
 ## Running
 
 ```bash
-chmod +x run_jython.sh run_cpython.sh    # once
+chmod +x run_jython.sh run_cpython.sh setup_pg_monitoring.sh    # once
 
 ./run_jython.sh both                     # Jython: sequential + parallel
 ./run_cpython.sh both                    # CPython: sequential + parallel
 ```
+
+The first argument picks the program: `1` (sequential), `2` (parallel) or `both` (default).
 
 Options (environment variables, put them before the command):
 
@@ -59,21 +70,62 @@ Options (environment variables, put them before the command):
 | `SIZE` | `small`, or `5`, `25`, `50`, `100` for `datagenerator/params-N.py` | `small` |
 | `RUNS` | how many times to run each program | `1` |
 | `REGEN` | `1` = regenerate the CSV files | `0` |
+| `CLEAR_CACHE` | `1` = restart PostgreSQL and clear the OS file cache before every run ("cold" runs; asks for your password once) | `0` |
+| `PG_MONITOR` | `0` = don't monitor PostgreSQL during the runs | `1` |
+| `PY_VERSION` | CPython version when uv is used, e.g. `3.13`, `3.14t` (free-threaded) | `3.14` |
+| `PYTHON` | CPython interpreter to use instead of the `.venv` one | |
+| `JAVA_OPTS` | extra Java options for Jython, e.g. `-Xmx4g` | |
+| `PG_RESTART_CMD` | command to restart PostgreSQL for `CLEAR_CACHE=1`, if not a Homebrew service or `systemctl` | |
+| `TIMER_PYTHON` | `python3` used by the measuring code | `python3` on the PATH |
 
-Example: the paper's smallest data set (1 million downloads, 5 million facts), three runs each:
+Example: the paper's smallest data set (1 million downloads, 5 million facts), seven runs each:
 
 ```bash
-SIZE=5 RUNS=3 ./run_jython.sh both
-SIZE=5 RUNS=3 ./run_cpython.sh both
+SIZE=5 RUNS=7 ./run_jython.sh both
+SIZE=5 RUNS=7 ./run_cpython.sh both
+SIZE=5 RUNS=7 CLEAR_CACHE=1 ./run_cpython.sh both    # cold runs
+SIZE=5 RUNS=7 PY_VERSION=3.14t ./run_cpython.sh 2    # parallel version on free-threaded Python
 ```
 
-Every run prints its wall-clock and CPU time and the loaded row counts, and is appended to
-`run/results.csv` (columns: `timestamp, runtime, program, size, run, real_s, user_s, sys_s,
-page_versions, facts, total_errors`). The row counts must be identical for all four programs
-on the same data set.
+Before every run the tables are dropped and recreated (`starschema.sql`), so all runs start
+from an empty data warehouse. Only the ETL program itself is timed.
 
 With the default `small` data set, the expected result is 801 page versions, 6000 facts
-and 33385 total errors.
+and 33385 total errors; with `SIZE=5` it is 599059 page versions, 5000000 facts and 26862851
+total errors. The row counts must be identical for all four programs on the same data set.
+
+## Measurements
+
+Every run prints a summary and is appended as one row to `run/results.csv` (shared by both
+scripts; runs from one script invocation share a `run_id`). The columns are:
+
+| Group | Columns |
+|---|---|
+| Run | `timestamp`, `run_id`, `runtime` (jython/cpython), `program`, `size`, `run` |
+| Time | `real_s` (wall-clock), `user_s`, `sys_s` (CPU time of the ETL program and all its processes) |
+| Memory | `peak_rss_total_mb` (all processes together), `max_rss_single_mb` (largest single process) |
+| Disk | `fs_reads`, `fs_writes` (block I/O operations; often 0 on macOS), `db_size_mb` (size of the loaded tables) |
+| Check | `page_versions`, `facts`, `total_errors` |
+| Database connection, sampled about once per second | `pg_busy_pct` (working), split into `pg_cpu_pct`, `pg_io_pct` (waiting for disk), `pg_lock_pct`, `pg_other_pct`; `pg_waiting_for_etl_pct` (idle, waiting for the ETL program) |
+| PostgreSQL work | `pg_cpu_s` (CPU time of all PostgreSQL processes), `pg_stmt_time_s`, `pg_stmt_calls` (SQL statements), `pg_io_time_s` (time reading/writing data files), `pg_wal_mb` (WAL written), `pg_checkpoints`, `pg_checkpoints_forced`, `pg_cache_hit_pct`, `pg_blocks_read` |
+| Setup | `cache_cleared`, `host`, `os`, `cpu`, `cores`, `ram_gb`, `runtime_version` (e.g. `CPython 3.14.7 (uv)`), `postgres_version`, `pg_settings` (main PostgreSQL settings) |
+
+Values that cannot be measured are written as `NA`. If the columns change in a new version
+of the scripts, the old file is renamed to `run/results-old-<date>.csv`.
+
+`pg_stmt_time_s`, `pg_stmt_calls` and `pg_io_time_s` need a one-time PostgreSQL setup
+(it enables the `pg_stat_statements` extension and `track_io_timing`, and restarts PostgreSQL):
+
+```bash
+./setup_pg_monitoring.sh           # once
+./setup_pg_monitoring.sh --undo    # back to the previous configuration
+```
+
+With it, the 15 slowest SQL statements of every run are also saved in
+`run/pg_statements/<run_id>_<runtime>_<program>_run<N>.txt`.
+
+Other files in `run/`: the generated `DownloadLog.csv` and `TestResults.csv`, and
+`last_run.log` with the output of the last program run (look here if a run fails).
 
 
 ## Credits and license
