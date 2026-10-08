@@ -2,7 +2,7 @@
 
 The example ETL programs from the paper *"Easy and Effective Parallel Programmable ETL"*
 (C. Thomsen and T. B. Pedersen, DOLAP 2011), made runnable today on both **Jython**
-(as in the paper) and **CPython 3**, with scripts to run and time them.
+(as in the paper) and **CPython 3**, with a small Python tool (`bench.py`) to time them.
 
 The programs load test results for web pages into a small star schema in PostgreSQL
 (`starschema.sql`): a slowly changing `page` dimension, a `test` and a `date` dimension,
@@ -18,10 +18,9 @@ and the fact table `testresults`.
 | `pygrametl2_cpython.py` | CPython 3 version of `pygrametl2.py` (psycopg2) |
 | `starschema.sql` | Creates the `pygrametlexa` schema and its tables |
 | `datagenerator/` | Generates the input CSV files; `params-N.py` are the data set sizes |
-| `run_jython.sh` | Runs and measures the Jython programs |
-| `run_cpython.sh` | Runs and measures the CPython programs |
-| `bench_common.sh` | Measuring code shared by both run scripts (sourced, not run directly): timing, memory, PostgreSQL monitoring, cache clearing, `results.csv` |
-| `setup_pg_monitoring.sh` | One-time PostgreSQL setup for SQL statement and disk I/O times (optional) |
+| `bench.py` | Runs one ETL program on empty tables and measures wall-clock time, CPU time and PostgreSQL time (see [Measuring](#measuring-benchpy)) |
+| `run_jython.sh`, `run_cpython.sh` | Old run scripts. Their setup part (downloads, Python environment, database, data) is still a useful reference; their measuring part is out of date, **do not use them for now** (they will be replaced by a short setup script) |
+| `setup_pg_monitoring.sh` | One-time PostgreSQL setup for the old, more detailed measuring (no longer used by the scripts) |
 | `requirements.txt` | Python packages for the CPython versions (installed automatically) |
 | `results.md` | Summary of the benchmark results |
 | `pdi-1-conn.ktr`, `pdi-2-conns.ktr` | The same ETL flow in Pentaho Data Integration, used for comparison in the paper |
@@ -36,13 +35,14 @@ brew install openjdk postgresql@18
 brew services start postgresql@18
 ```
 
-Everything else is downloaded by the scripts on first use: Jython 2.7.4, the PostgreSQL JDBC
-driver, pygrametl 2.9 and psycopg2. The measuring code also needs a `python3` on the PATH
-(any version; macOS has one).
+The project also needs Jython 2.7.4, the PostgreSQL JDBC driver and pygrametl 2.9 in `lib/`,
+and a Python environment (`.venv-3.14t`) with pygrametl and psycopg2. These are not in git; the
+old run scripts download and create them on their first run. `bench.py` itself only needs a
+`python3` on the PATH (any version; macOS has one) and `psql`.
 
 Only one PostgreSQL version may run at a time: if several Homebrew versions are started, they
 compete for port 5432 and the benchmarks may silently use the wrong one (check with
-`brew services list`; the version is recorded in `results.csv`).
+`brew services list`).
 
 Optional but recommended: [uv](https://docs.astral.sh/uv/) (`brew install uv`). If it is
 installed, `run_cpython.sh` uses it to create `.venv-3.14t` with the same Python version on
@@ -51,83 +51,137 @@ normal build with the GIL in `.venv-3.14`. Without uv
 it falls back to `python3 -m venv .venv` and pip.
 
 The programs connect to `jdbc:postgresql://localhost/chr?user=chr` (hard-coded by the original
-author), so the scripts create a PostgreSQL user and database called `chr` if they are missing.
+author), so PostgreSQL needs a user and a database called `chr` (once per computer):
+
+```bash
+psql -h localhost -d postgres -c "create role chr login"
+psql -h localhost -d postgres -c "create database chr owner chr"
+```
+
+## Generating the data
+
+The programs read two CSV files from the folder they are started in: `DownloadLog.csv` (one
+row per downloaded web page, for the page dimension) and `TestResults.csv` (one row per test
+run, the facts). They are made by the data generator from the paper. Its settings file decides
+the size: `datagenerator/params-N.py` with N = 5, 25, 50 or 100 (more months = more rows).
+
+All commands below are run inside `run/`. For example, for `params-5` (1 million downloads,
+5 million test results):
+
+```bash
+cd run
+cp ../datagenerator/params-5.py params.py          # choose the size
+cp ../datagenerator/datagenerator.py .             # the generator must sit next to params.py
+rm -f 'params$py.class'                            # delete Jython's compiled copy of the old settings
+java --enable-native-access=ALL-UNNAMED -cp ../lib/jython-standalone-2.7.4.jar org.python.util.jython datagenerator.py
+wc -l DownloadLog.csv TestResults.csv              # params-5: 1000001 and 5000001 lines (incl. header)
+```
+
+The generator uses a fixed random seed, so the same params file always gives the same data.
 
 ## Running
 
-```bash
-chmod +x run_jython.sh run_cpython.sh setup_pg_monitoring.sh    # once
+From inside `run/` (where the CSV files are). Each command runs one program once and prints its
+measurements; `bench.py` empties the tables before the run by itself.
 
-./run_jython.sh both                     # Jython: sequential + parallel
-./run_cpython.sh both                    # CPython: sequential + parallel
-```
-
-The first argument picks the program: `1` (sequential), `2` (parallel) or `both` (default).
-
-Options (environment variables, put them before the command):
-
-| Variable | Meaning | Default |
-|---|---|---|
-| `SIZE` | `small`, or `5`, `25`, `50`, `100` for `datagenerator/params-N.py` | `small` |
-| `RUNS` | how many times to run each program | `1` |
-| `REGEN` | `1` = regenerate the CSV files | `0` |
-| `CLEAR_CACHE` | `1` = restart PostgreSQL and clear the OS file cache before every run ("cold" runs; asks for your password once) | `0` |
-| `PG_MONITOR` | `0` = don't monitor PostgreSQL during the runs | `1` |
-| `UNLOGGED` | `1` = create the tables as UNLOGGED (PostgreSQL writes no WAL for them); recorded as `unlogged_tables=on` in `pg_settings` | `0` |
-| `PY_VERSION` | CPython version when uv is used, e.g. `3.14` (normal build with GIL), `3.13`; a `t` at the end means free-threaded | `3.14t` |
-| `PYTHON` | CPython interpreter to use instead of the `.venv` one | |
-| `JAVA_OPTS` | extra Java options for Jython, e.g. `-Xmx5g` (more memory); recorded in `runtime_version` | |
-| `PG_RESTART_CMD` | command to restart PostgreSQL for `CLEAR_CACHE=1`, if not a Homebrew service or `systemctl` | |
-| `TIMER_PYTHON` | `python3` used by the measuring code | `python3` on the PATH |
-
-Example: the paper's smallest data set (1 million downloads, 5 million facts), seven runs each:
+**1. Jython, sequential** (`pygrametl1.py`):
 
 ```bash
-SIZE=5 RUNS=7 ./run_jython.sh both
-SIZE=5 RUNS=7 ./run_cpython.sh both
-SIZE=5 RUNS=7 CLEAR_CACHE=1 ./run_cpython.sh both    # cold runs
-SIZE=5 RUNS=7 PY_VERSION=3.14 ./run_cpython.sh 2     # parallel version on the normal (GIL) Python
+python3 ../bench.py env JYTHONPATH=../lib/pygrametl-2.9 java --enable-native-access=ALL-UNNAMED -cp ../lib/jython-standalone-2.7.4.jar:../lib/postgresql-42.7.4.jar org.python.util.jython ../pygrametl1.py
 ```
 
-Before every run the tables are dropped and recreated (`starschema.sql`), so all runs start
-from an empty data warehouse. Only the ETL program itself is timed.
+**2. Jython, parallel** (`pygrametl2.py`):
 
-With the default `small` data set, the expected result is 801 page versions, 6000 facts
-and 33385 total errors; with `SIZE=5` it is 599059 page versions, 5000000 facts and 26862851
-total errors. The row counts must be identical for all four programs on the same data set.
+```bash
+python3 ../bench.py env JYTHONPATH=../lib/pygrametl-2.9 java --enable-native-access=ALL-UNNAMED -cp ../lib/jython-standalone-2.7.4.jar:../lib/postgresql-42.7.4.jar org.python.util.jython ../pygrametl2.py
+```
 
-## Measurements
+**3. CPython, sequential** (`pygrametl1_cpython.py`):
 
-Every run prints a summary and is appended as one row to `run/results.csv` (shared by both
-scripts; runs from one script invocation share a `run_id`). The columns are:
+```bash
+python3 ../bench.py "$(cd .. && pwd)/.venv-3.14t/bin/python" ../pygrametl1_cpython.py
+```
 
-| Group | Columns |
+**4. CPython, parallel** (`pygrametl2_cpython.py`):
+
+```bash
+python3 ../bench.py "$(cd .. && pwd)/.venv-3.14t/bin/python" ../pygrametl2_cpython.py
+```
+
+Everything after `python3 ../bench.py` is the command that is timed:
+
+| Part | Meaning |
 |---|---|
-| Run | `timestamp`, `run_id`, `runtime` (jython/cpython), `program`, `size`, `run` |
-| Time | `real_s` (wall-clock), `user_s`, `sys_s` (CPU time of the ETL program and all its processes) |
-| Memory | `peak_rss_total_mb` (all processes together), `max_rss_single_mb` (largest single process) |
-| Disk | `fs_reads`, `fs_writes` (block I/O operations; often 0 on macOS), `db_size_mb` (size of the loaded tables) |
-| Check | `page_versions`, `facts`, `total_errors` |
-| Database connection, sampled about once per second | `pg_busy_pct` (working), split into `pg_cpu_pct`, `pg_io_pct` (waiting for disk), `pg_lock_pct`, `pg_other_pct`; `pg_waiting_for_etl_pct` (idle, waiting for the ETL program) |
-| PostgreSQL work | `pg_cpu_s` (CPU time of all PostgreSQL processes), `pg_stmt_time_s`, `pg_stmt_calls` (SQL statements), `pg_io_time_s` (time reading/writing data files), `pg_wal_mb` (WAL written), `pg_checkpoints`, `pg_checkpoints_forced`, `pg_cache_hit_pct`, `pg_blocks_read` |
-| Setup | `cache_cleared`, `host`, `os`, `cpu`, `cores`, `ram_gb`, `runtime_version` (e.g. `CPython 3.14.7 free-threaded (uv)`), `postgres_version`, `pg_settings` (main PostgreSQL settings) |
+| `env JYTHONPATH=../lib/pygrametl-2.9` | where Jython finds the pygrametl library |
+| `java ... org.python.util.jython` | start Java and the Jython interpreter in it |
+| `--enable-native-access=ALL-UNNAMED` | only hides a warning of newer Java versions |
+| `-cp jython.jar:postgresql.jar` | the classpath: Jython itself and the PostgreSQL JDBC driver |
+| `"$(cd .. && pwd)/.venv-3.14t/bin/python"` | the CPython interpreter of the project's environment, as a full path (with `../.venv-3.14t/...` Python 3.14 prints a harmless `sys.prefix` warning) |
+| `../pygrametl1.py` etc. | the ETL program |
 
-Values that cannot be measured are written as `NA`. If the columns change in a new version
-of the scripts, the old file is renamed to `run/results-old-<date>.csv`.
+So the Jython times include starting Java and Jython (a few seconds). The remaining
+`sun.misc.Unsafe` warnings from Java are harmless.
 
-`pg_stmt_time_s`, `pg_stmt_calls` and `pg_io_time_s` need a one-time PostgreSQL setup
-(it enables the `pg_stat_statements` extension and `track_io_timing`, and restarts PostgreSQL):
+**Expected result:** with `params-5` every program must load **599059 page versions and
+5000000 facts**; `bench.py` prints these counts after each run. If a program loads different
+numbers, its time is not comparable.
 
-```bash
-./setup_pg_monitoring.sh           # once
-./setup_pg_monitoring.sh --undo    # back to the previous configuration
-```
+**Note on the GIL:** `.venv-3.14t` is the free-threaded Python 3.14 (no GIL), but psycopg2 is
+not marked as safe without the GIL, so Python **switches the GIL back on** when the programs
+import it (`RuntimeWarning: The global interpreter lock (GIL) has been enabled ...`). The CPython
+programs therefore run *with* the GIL unless `PYTHON_GIL=0` is set (at your own risk). This also
+applies to the earlier CPython results in `results.md`.
 
-With it, the 15 slowest SQL statements of every run are also saved in
-`run/pg_statements/<run_id>_<runtime>_<program>_run<N>.txt`.
+**For results you report:** close other apps (browser, IDE), keep the laptop plugged in, let it
+cool down first, and do not use database `chr` from anywhere else during a run. On a busy
+laptop the same program took between 238 s and 299 s.
 
-Other files in `run/`: the generated `DownloadLog.csv` and `TestResults.csv`, and
-`last_run.log` with the output of the last program run (look here if a run fails).
+## Measuring (`bench.py`)
+
+`bench.py` is a short Python script that uses only the standard library and `psql`. It is
+used as `python3 bench.py <command to time>` and does, in this order:
+
+1. **Recreate the empty tables** by running `starschema.sql` with `psql` (`-v ON_ERROR_STOP=1`,
+   so a failed reset stops `bench.py`). This is setup and is not part of any measurement.
+2. **Read the counters before the run:** PostgreSQL's busy time and the CPU time used so far.
+3. **Run the program** with `subprocess.run(cmd, check=True)`, which waits until it has
+   finished. If the program fails, `bench.py` stops with an error and reports no time.
+4. **Wait one second** and read the counters again (see below).
+5. **Count the loaded rows** (`page` and `testresults`) as a check.
+6. **Print** the results.
+
+It measures three things:
+
+| Output | What it is | How it is measured |
+|---|---|---|
+| `wall-clock time` | how long the program took, as on a clock | `time.perf_counter()` before and after the run |
+| `user time`, `system time` | CPU time of the program and all processes and threads it starts: *user* = its own code (e.g. pygrametl, Jython), *system* = the operating system working for it (reading files, network) | `resource.getrusage(RUSAGE_CHILDREN)` before and after: the operating system's counters, the same source as `/usr/bin/time` |
+| `PostgreSQL time` | time PostgreSQL spent executing SQL statements in database `chr` | the column `active_time` of PostgreSQL's view `pg_stat_database` before and after (built into PostgreSQL 14+, no extension needed) |
+
+All three are "after minus before" differences of running totals, so anything before the
+run (such as the table reset) is not counted. The one-second wait is needed because a
+PostgreSQL connection reports its statistics when it closes, just after the program ends.
+
+**How to read the numbers:**
+
+- For a **sequential** program, which either computes or waits:
+  `wall-clock ≈ (user + system) + PostgreSQL time + the rest`, where *the rest* is mainly the
+  round trips between the program and PostgreSQL. Example, Jython sequential with `params-5`:
+  146 s computing + 68 s PostgreSQL + 24 s rest = 238 s.
+- For a **parallel** program, computing and waiting overlap, and `user + system` can be
+  **larger** than the wall-clock time (e.g. 4 cores busy for 10 s = 40 s CPU). That shows
+  it really ran in parallel.
+
+**Limits:**
+
+- `PostgreSQL time` counts every connection to database `chr`, so nothing else should use it
+  during a run. It includes `bench.py`'s own readings (a few milliseconds).
+- `PostgreSQL time` is how long statements ran, not PostgreSQL's CPU time: a statement
+  waiting for the disk also counts.
+- The CPU time does not include PostgreSQL, which is a separate server process.
+
+Older results from the previous, more detailed measuring tool are in `run/results.csv` and
+`run/results-old-*.csv`.
 
 
 ## Credits and license

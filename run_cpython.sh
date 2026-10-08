@@ -11,12 +11,6 @@
 #   SIZE=small (default) | 5 | 25 | 50 | 100   dataset size (numbers = datagenerator/params-N.py)
 #   REGEN=1                                     regenerate the CSV files even if they exist
 #   RUNS=3                                      run each program N times (default 1)
-#   CLEAR_CACHE=1                               restart PostgreSQL and clear the OS file cache
-#                                               before every run (asks for your password once)
-#   PG_MONITOR=0                                don't monitor PostgreSQL during the runs
-#                                               (./setup_pg_monitoring.sh once adds SQL statement times)
-#   UNLOGGED=1                                  create the tables as UNLOGGED (no WAL; to measure
-#                                               how much PostgreSQL's write work costs)
 #   PY_VERSION=3.14t (default) | 3.14 | 3.13 ... Python version, used when uv is installed
 #                                               (3.14t = free-threaded build, 3.14 = normal build with GIL)
 #
@@ -25,15 +19,15 @@
 #   SIZE=5 RUNS=3 ./run_cpython.sh 2      # parallel version three times
 #   SIZE=5 PY_VERSION=3.14 ./run_cpython.sh 2    # parallel version on the normal (GIL) Python
 #
-# Every run is appended to run/results.csv (shared with run_jython.sh) with its time,
-# memory, disk I/O, row counts and a description of the machine and PostgreSQL settings.
+# Every run is measured by bench.py (wall-clock time, CPU time, PostgreSQL busy time)
+# and appended to run/results_simple.csv, which is shared with the other run script.
 #
 # Overview of what the script does, in order (same steps as run_jython.sh):
 #   1. prerequisites  find/create the Python environment, install pygrametl and psycopg2 if missing
 #   2. database       make sure the PostgreSQL user and database "chr" exist
 #   3. data           generate the input CSV files (only when the size changed or REGEN=1)
-#   4. setup          record the Python version, load the shared measuring code
-#   5. run            for each run: recreate the tables, (clear caches), run + measure, save a row
+#   4. setup          record the runtime version
+#   5. run            run bench.py, which recreates the tables and measures each run
 
 # Stop at the first error (-e), treat unset variables as errors (-u),
 # and let a pipeline fail if any command in it fails (-o pipefail).
@@ -45,7 +39,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"          # .../pygrametl/exaprogs (the folder of this script)
 REPO="$(dirname "$HERE")"                       # parent folder (a pygrametl checkout, if exaprogs sits in one)
 LIB="$HERE/lib"
-WORK="$HERE/run"                                # generated data, logs and results.csv go here
+WORK="$HERE/run"                                # generated data, logs and results_simple.csv go here
 SIZE="${SIZE:-small}"
 RUNS="${RUNS:-1}"
 WHICH="${1:-both}"                              # first command-line argument: 1, 2 or both
@@ -190,40 +184,14 @@ if grep -q '^uv = ' "$(dirname "$(dirname "$PYTHON")")/pyvenv.cfg" 2>/dev/null; 
 fi
 echo "Runtime: $RUNTIME_VERSION"
 
-# Load the measuring code shared with run_jython.sh (". file" = run it inside this script,
-# so its functions become available here). Both scripts measure in exactly the same way.
-. "$HERE/bench_common.sh"
-collect_machine_info       # CPU, cores, RAM, OS, PostgreSQL version and settings
-init_results_file          # create run/results.csv with its header if needed
-init_cache_clearing        # only with CLEAR_CACHE=1: ask for the sudo password once
-
 # ---------------------------------------------------------------- run
-# run 1 -> pygrametl1_cpython.py (sequential), run 2 -> pygrametl2_cpython.py (parallel), each RUNS times
+# Measure with bench.py: it recreates the empty tables before every run, runs the program
+# RUNS times and records wall-clock time, CPU time and PostgreSQL busy time.
+# PYTHONPATH is only set when using a pygrametl checkout; otherwise it is empty and
+# pygrametl comes from the .venv. The program's own messages go to run/last_run.log
 run() {
-  local prog="pygrametl$1_cpython.py" i
-  for i in $(seq 1 "$RUNS"); do
-    echo
-    echo "=== $prog  (run $i of $RUNS) ==="
-    # Start every run from empty tables: starschema.sql drops and recreates the star schema
-    # (as UNLOGGED tables if UNLOGGED=1; see reset_schema in bench_common.sh).
-    reset_schema "$HERE/starschema.sql"
-    clear_caches            # does nothing unless CLEAR_CACHE=1 (see bench_common.sh)
-
-    # Run the ETL program with the .venv Python and measure it: wall-clock time, CPU time,
-    # memory and disk I/O. Only the program itself is timed, not the setup above.
-    # PYTHONPATH is only set when using a pygrametl checkout; otherwise it is empty and
-    # pygrametl comes from the .venv.
-    # The program's own messages go to run/last_run.log
-    # Name for this run, used for the file with its slowest SQL statements (run/pg_statements/)
-    MEASURE_LABEL="cpython_pygrametl$1_run$i"
-    if ! measure last_run.log env PYTHONPATH="$PYGRAMETL_PATH" "$PYTHON" "$HERE/$prog"; then
-      echo "$prog FAILED. Its output:"; cat last_run.log; exit 1
-    fi
-    DB_MB=$(db_size_mb)     # size of the loaded data warehouse
-    count_results           # row counts, to check that every program loaded the same data
-    print_result            # show the numbers on screen
-    record_result cpython "pygrametl$1" "$i" "$RUNTIME_VERSION"   # append one row to results.csv
-  done
+  python3 "$HERE/bench.py" --name "cpython-pygrametl$1" --runs "$RUNS" --runtime "$RUNTIME_VERSION" \
+    --workdir "$WORK" -- env PYTHONPATH="$PYGRAMETL_PATH" "$PYTHON" "$HERE/pygrametl$1_cpython.py"
 }
 
 # Decide what to run from the first argument
@@ -234,4 +202,4 @@ case "$WHICH" in
 esac
 
 echo
-echo "All runs are logged in $WORK/results.csv"
+echo "All runs are logged in $WORK/results_simple.csv"

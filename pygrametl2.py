@@ -45,7 +45,7 @@ def pgbulkloader(name, atts, fieldsep, rowsep, nullval, filename):
           (name, ', '.join(atts), fieldsep)
     global rawconn
     copymgr = rawconn.getCopyAPI()
-    copymgr.copyIn(sql, filehandle)
+    copymgr.copyIn(sql, filehandle) 
 
 # Connection to target DW:
 java.lang.Class.forName("org.postgresql.Driver")

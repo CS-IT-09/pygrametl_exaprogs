@@ -12,6 +12,7 @@ import sys
 import time
 
 import psycopg2                                         # CPython: instead of java.lang/java.sql
+# Connection to postgresql  
 
 import pygrametl
 from pygrametl import ConnectionWrapper                 # CPython: instead of JDBCConnectionWrapper
