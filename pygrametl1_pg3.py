@@ -35,11 +35,8 @@ def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
         name, ', '.join(atts), fieldsep, str(nullval))
     cursor = pgconn.cursor()
     with cursor.copy(sql) as copy:
-        while True:
-            data = filehandle.read(65536)
-            if not data:
-                break
-            copy.write(data)
+        copy.write(filehandle.read())
+
 
 def datehandling(row, namemapping):
     # This method is called from ensure(row) when the lookup of a date fails.

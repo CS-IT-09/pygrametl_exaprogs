@@ -47,11 +47,7 @@ def pgbulkloader(name, atts, fieldsep, rowsep, nullval, filename):
     with open(filename, 'r') as filehandle:
         cursor = rawconn.cursor()
         with cursor.copy(sql) as copy:
-            while True:
-                data = filehandle.read(65536)
-                if not data:
-                    break
-                copy.write(data)
+            copy.write(filehandle.read())
 
 # Connection to target DW:
 rawconn = psycopg.connect(host='localhost', dbname='chr', user='chr')  # CPython
