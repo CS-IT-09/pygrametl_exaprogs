@@ -63,41 +63,65 @@ by wall-clock.
 | Free-threaded | Sequential (last block) | 98.92 / 100.60 / 99.02 | 99.5 | 49.4 | 8.8 | 58.2 | 24.8 | 0.59 |
 | Regular | Sequential (last block) | 97.94 / 97.93 / 98.91 | 98.3 | 47.9 | 8.8 | 56.7 | 25.0 | 0.58 |
 
-## 4. What the tables show
+## 4. What we can see
 
 - **Threads with the GIL off are the fastest configuration:** 71.1 s on 3.14t and 70.8 s on
   3.15t, 29% faster than sequential on the same build (100.2 s and 99.3 s, means of both blocks)
   and 28% faster than sequential on the regular build.
 - **Threads beat processes when the GIL is off:** 17 to 18% faster (86.3 and 84.8 s) using 30%
   less CPU (117.5 and 115.8 s against 167.5 and 164.6 s).
-- **The GIL decides whether threads work:** with it on, threads are 39% slower (117.1 and 115.2 s),
-  use less than one core (0.90), and are 16 to 17% slower than sequential.
-- **Processes are 14 to 18% faster than sequential** on every build and both Python versions,
-  at 2.6 to 2.9 times the CPU.
-- **The GIL barely matters for processes,** but GIL off is consistently 3.5 to 3.7% *slower*
-  (3.14t: 86.3 against 83.2 s; 3.15t: 84.8 against 81.9 s).
-- **The free-threaded build costs 1 to 3% for sequential code** (3.14: 2.8%, 3.15: 1.3%).
-- **3.15 behaves like 3.14:** every configuration is within 0 to 2% of its 3.14 time, which
-  is within the drift between sessions.
-- **PostgreSQL time is 24 to 27 s in every configuration,** so the differences come from the
-  ETL program, not the database.
 
-## 5. Notes and limits
 
-Ratios to sequential on the same build, Python 3.14 (positive = faster than sequential):
 
-| Version | Apple M2, macOS (this file) | Intel i7, WSL2 |
-|---|---|---|
-| Multiprocessing (regular build) | 17% faster | 26% slower |
-| Processes, GIL on (free-threaded) | 17% faster | 23% slower |
-| Threads, GIL on | 17% slower | 43% slower |
-| **Threads, GIL off** | **29% faster** | **about equal (0.2% faster)** |
 
-- **The main conclusions agree:** the GIL decides whether threads work, threads beat processes
-  when the GIL is off, and 3.15 behaves like 3.14.
-- **The big difference is the size of the gain:** on the M2 every parallel version except
-  threads with the GIL on beats sequential; on the i7 none did. Possible reasons: twice as
-  many cores (8 against 4), no WSL2 overhead, different PostgreSQL versions (18.6 against 16.15)
-  and possibly settings.
-- **PostgreSQL time is the same on both machines** (about 25 s), so the difference comes from how
-  fast the ETL program itself runs in parallel.
+# PostgreSQL tunning SIZE = 25
+
+## 1. The tunings
+
+| # | Tuning | max_wal_size | shared_buffers | checkpoint_timeout | wal_compression | Tables |
+|---|---|---|---|---|---|---|
+| 1 | default | 1GB | 128MB | 5min | off | logged |
+| 2 | wal4 | 4GB | 128MB | 5min | off | logged |
+| 2b | wal8 | 8GB | 128MB | 5min | off | logged |
+| 3 | wal16 | 16GB | 128MB | 30min | off | logged |
+| 4a | buf1-wal1 | 1GB | 1GB | 5min | off | logged |
+| 4b | buf1-wal4 | 4GB | 1GB | 5min | off | logged |
+| 4c | buf1-wal8 | 8GB | 1GB | 5min | off | logged |
+| 4d | buf1-wal16 | 16GB | 1GB | 30min | off | logged |
+| **5a** | **buf2-wal1** | 1GB | 2GB | 5min | off | logged |
+| 5b | buf2-wal4 | 4GB | 2GB | 5min | off | logged |
+| 5c | buf2-wal8 | 8GB | 2GB | 5min | off | logged |
+| 5d | buf2-wal16 | 16GB | 2GB | 30min | off | logged |
+| 5d' | buf2-wal16, 5min | 16GB | 2GB | 5min | off | logged |
+| 6a | buf3-wal1 | 1GB | 3GB | 5min | off | logged |
+| 6b | buf3-wal4 | 4GB | 3GB | 5min | off | logged |
+| 7 | unlogged | 1GB | 2GB | 5min | off | UNLOGGED |
+| 8 | pgtune (wal + buf)* | 16GB** | 2GB | 5min | off | logged |
+* PGTune's WAL and buffer settings: like 5d' plus min_wal_size=4GB (default 80MB) and
+wal_buffers=16MB (default about 4MB);
+
+## 2. Results
+
+Wall time is shown for each of the 3 runs and as the mean; the other time columns are means
+of the 3 runs. CPU is user + system, and "cores busy" is CPU divided by wall-clock. Forced
+checkpoints and WAL are per run: (counter after − counter before) / 3.
+
+| # | Tuning | Wall per run (s) | Mean wall (s) | User (s) | Sys (s) | CPU (s) | PostgreSQL (s) | Cores busy | Forced checkpoints | WAL (MB) | Error total OK |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | default | 787.89 / 752.99 / 813.57 | 784.8 | 452.0 | 100.9 | 552.9 | 468.4 | 0.70 | 27 | 15391 | ✓ |
+| 2 | wal4 | 657.94 / 683.28 / 726.83 | 689.4 | 453.1 | 102.4 | 555.5 | 391.0 | 0.81 | 2.7 | 8038 | ✓ |
+| 2b | wal8 | 736.65 / 682.93 / 674.62 | 698.1 | 448.8 | 102.3 | 551.0 | 386.0 | 0.79 | 0.3 | 8178 | ✓ |
+| 3 | wal16 (repeat) ⚠ | 707.56 / 556.99 / 514.67 | 593.1 | 459.3 | 103.8 | 563.1 | 333.4 | 0.95 | 0.7 | 4983 | – |
+| 4a | buf1-wal1 | 365.08 / 371.63 / 368.31 | 368.3 | 449.0 | 103.8 | 552.8 | 159.1 | 1.50 | 27 | 15857 | ✓ |
+| 4b | buf1-wal4 | 362.72 / 364.06 / 363.98 | 363.6 | 465.6 | 108.5 | 574.1 | 140.0 | 1.58 | 3.0 | 7892 | ✓ |
+| 4c | buf1-wal8 | 367.98 / 367.19 / 367.18 | 367.5 | 468.1 | 108.7 | 576.9 | 142.3 | 1.57 | 0 | 7084 | ✓ |
+| 4d | buf1-wal16 | 371.06 / 369.53 / 369.93 | 370.2 | 468.8 | 108.3 | 577.1 | 144.8 | 1.56 | 0 | 4583 | ✓ |
+| **5a** | **buf2-wal1** | 355.15 / 350.68 / 354.45 | 353.4 | 441.1 | 101.1 | 542.2 | 152.0 | 1.53 | 25.7 | 15825 | ✓ |
+| 5b | buf2-wal4 | 355.08 / 358.26 / 360.10 | 357.8 | 464.5 | 108.2 | 572.7 | 135.5 | 1.60 | 3.0 | 7941 | ✓ |
+| 5c | buf2-wal8 | 362.33 / 352.67 / 352.00 | 355.7 | 461.6 | 103.0 | 564.6 | 135.9 | 1.59 | 0 | 7374 | ✓ |
+| 5d | buf2-wal16 | 360.31 / 365.86 / 362.94 | 363.0 | 468.6 | 108.8 | 577.4 | 138.3 | 1.59 | 0 | 4597 | ✓ |
+| 5d'| buf2-wal16, 5min| 368.81 / 366.06 / 361.04 | 365.3 | 466.1 | 107.3 | 573.4 | 140.7 | 1.57 | 0 | 7107 | ✓ |
+| 6a | buf3-wal1 | 359.52 / 355.82 / 354.48 | 356.6 | 441.5 | 101.1 | 542.7 | 154.2 | 1.52 | 25.0 | 15231 | ✓ |
+| 6b | buf3-wal4 | 352.90 / 358.01 / 356.12 | 355.7 | 462.5 | 107.1 | 569.6 | 135.7 | 1.60 | 3.0 | 7623 | ✓ |
+| 7 | unlogged | 349.91 / 348.40 / 352.87 | 350.4 | 467.1 | 108.1 | 575.2 | 124.6 | 1.64 | 0 | 1 | ✓ |
+| 8 | pgtune (wal + buf) | 358.32 / 361.30 / 365.76 | 361.8 | 467.6 | 109.2 | 576.8 | 137.9 | 1.59 | 0 | 7111 | ✓ |
