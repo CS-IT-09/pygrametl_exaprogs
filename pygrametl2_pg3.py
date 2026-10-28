@@ -184,7 +184,7 @@ def main():
     # commit() does wait for all queued operations to be executed, so the
     # second commit() makes them permanent. (Not needed on Jython, where the
     # workers are threads sharing an in-memory queue.)
-    shrdconn.commit()
+    shrdconn.commit()    # look into this 
 
 if __name__ == '__main__':
     main()
