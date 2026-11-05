@@ -26,16 +26,18 @@ def reset_tables():
                    capture_output=True, check=True)
 
 
+def postgres_times_ms():
+    # Session, active and idle-in-transaction time of database chr so far (milliseconds)
+    # Added session time, active time, idle in transation time.
+    row = sql("select session_time, active_time, idle_in_transaction_time from pg_stat_database where datname = 'chr'")
+    return [float(value) for value in row.split("|")]
 
-def postgres_busy_ms():
-    # How long PostgreSQL has spent executing SQL in database chr so far (milliseconds)
-    return float(sql("select active_time from pg_stat_database where datname = 'chr'")) 
 
 reset_tables()  # start from empty tables
 time.sleep(1)  # wait a second to make sure PostgreSQL has updated its statistics
 
 
-pg_before = postgres_busy_ms()
+pg_before = postgres_times_ms()
 
 cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
 start = time.perf_counter()
@@ -44,17 +46,19 @@ end = time.perf_counter()
 cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
 
 time.sleep(1)  # wait a second to make sure PostgreSQL has updated its statistics
-pg_after = postgres_busy_ms()
+pg_after = postgres_times_ms()
 
 
 user_time = cpu_after.ru_utime - cpu_before.ru_utime
 system_time = cpu_after.ru_stime - cpu_before.ru_stime
-postgres_time = (pg_after - pg_before) / 1000.0  # convert from milliseconds to seconds
+session_time, postgres_time, idle_in_transaction_time = [(after - before) / 1000.0 for before, after in zip(pg_before, pg_after)]  # convert from milliseconds to seconds
 
 print(f"wall-clock time: {end - start:.2f} s")
 print(f"user time: {user_time:.2f} s")
 print(f"system time: {system_time:.2f} s")
 print(f"PostgreSQL time: {postgres_time:.2f} s")
+print(f"PostgreSQL waiting for client (idle in transaction): {idle_in_transaction_time:.2f} s")
+print(f"PostgreSQL session time: {session_time:.2f} s")
 
 pages = sql("select count(*) from pygrametlexa.page")
 facts = sql("select count(*) from pygrametlexa.testresults")

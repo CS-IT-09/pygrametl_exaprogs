@@ -1,27 +1,47 @@
-# SQLite version of pygrametl1_pg3.py: leg 1 of the SQLite -> DuckDB -> PostgreSQL
-# pipeline. The ETL logic is identical; only the target is the SQLite staging
-# database staging.db instead of PostgreSQL.
+# CPython 3 version of pygrametl1.py (the sequential example program).
+#
+# The ETL logic (dimensions, fact table, data sources and main()) is identical
+# to pygrametl1.py. Only the platform-specific parts are changed:
+#   - psycopg2 (a PEP 249 driver) + ConnectionWrapper instead of JDBC
+#   - the bulk loader uses psycopg2's copy_from instead of the JDBC CopyManager
+#   - open() instead of the Python 2 builtin file()
+# Lines that differ from pygrametl1.py are marked with "# CPython:".
 
 import datetime
 import sys
 import time
 
-import os
-import sqlite3                                         # SQLite: staging database instead of PostgreSQL
+import psycopg                                         # CPython: instead of java.lang/java.sql
+# Connection to postgresql  
 
 import pygrametl
 from pygrametl import ConnectionWrapper                 # CPython: instead of JDBCConnectionWrapper
 from pygrametl.datasources import CSVSource, MergeJoiningSource
 from pygrametl.tables import CachedDimension, SnowflakedDimension,\
-    SlowlyChangingDimension, BatchFactTable
+    SlowlyChangingDimension, BulkFactTable
 
 
-# Connection to the SQLite staging database
-STAGING = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'staging.db')  # SQLite
-sqliteconn = sqlite3.connect(STAGING)                   # SQLite
-connection = ConnectionWrapper(sqliteconn)              # SQLite
+# Connection to target DW:
+pgconn = psycopg.connect(host='/tmp', dbname='chr', user='chr')  # CPython
+connection = ConnectionWrapper(pgconn)                  # CPython
 connection.setasdefault()
+connection.execute('set search_path to pygrametlexa')
 
+dbtime = {'statements': 0.0, 'copy': 0.0}
+count = {'statements': 0, 'copy': 0}
+
+def timed(func, part):
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        try:
+            return func(*args, **kwargs)
+        finally:
+            dbtime[part] += time.perf_counter() - start
+            count[part] += 1
+    return wrapper
+
+connection.execute = timed(connection.execute, 'statements')
+connection.executemany = timed(connection.executemany, 'statements')
 
 # Methods
 def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
@@ -31,6 +51,9 @@ def pgcopybulkloader(name, atts, fieldsep, rowsep, nullval, filehandle):
     cursor = pgconn.cursor()
     with cursor.copy(sql) as copy:
         copy.write(filehandle.read())
+        
+pgcopybulkloader = timed(pgcopybulkloader, 'copy')  # TEMPORARY MEASUREMENT
+
 
 def datehandling(row, namemapping):
     # This method is called from ensure(row) when the lookup of a date fails.
@@ -95,11 +118,12 @@ datedim = CachedDimension(
     rowexpander=datehandling,
     prefill=True)
 
-facttbl = BatchFactTable(                            #   No copy command, and it writes each batch of 250,000 rows   
+facttbl = BulkFactTable(
     name='testresults',
     keyrefs=['pageid', 'testid', 'dateid'],
     measures=['errors'],
-    batchsize=250000)
+    bulkloader=pgcopybulkloader,
+    bulksize=250000)
 
 
 # Data sources
@@ -124,6 +148,9 @@ def main():
         facttbl.insert(row)
     connection.commit()
     connection.close()
+    print("[database calls] %d statements %.1f s, %d COPY batches %.1f s"
+        % (count['statements'], dbtime['statements'], count['copy'], dbtime['copy']),
+        file=sys.stderr)
 
 if __name__ == '__main__':
     main()
