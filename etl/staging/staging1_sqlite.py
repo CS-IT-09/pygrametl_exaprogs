@@ -17,7 +17,7 @@ from pygrametl.tables import CachedDimension, SnowflakedDimension,\
 
 
 # Connection to the SQLite staging database
-STAGING = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'staging.db')  # SQLite
+STAGING = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'staging.db')  # SQLite
 sqliteconn = sqlite3.connect(STAGING)                   # SQLite
 
 sqliteconn.execute('PRAGMA synchronous = OFF')    # staging is temporary: no fsync needed

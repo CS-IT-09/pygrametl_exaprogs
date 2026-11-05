@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import duckdb
 
-STAGING = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'staging.db')  # made by leg 1
+STAGING = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', 'staging.db')  # made by leg 1  # made by leg 1
 PG = "host=/tmp dbname=chr user=chr options=''-c maintenance_work_mem=512MB''"  # Unix socket, more memory for building indexes
 SCHEMA = 'pygrametlexa'
 

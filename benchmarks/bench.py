@@ -12,7 +12,7 @@ cmd = sys.argv[1:]      # the program to run
 PSQL = ["psql", "-h", "localhost", "-U", "chr", "-d", "chr", "-A", "-t"]
 
 # starschema.sql is in the same folder as this file
-SCHEMA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "starschema.sql")
+SCHEMA_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "schema", "starschema.sql")
 
 def sql(query):                          
     #Run one SQL query and return its result as text
